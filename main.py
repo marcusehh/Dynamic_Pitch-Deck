@@ -389,11 +389,12 @@ def ui (screen,mainClock):
 
         pygame.display.update()
         mainClock.tick(30)
-def draw_text (text,font,x,y): #No clue mate, ACC for drawing text at this location
-    textobj = font.render(text,1,(244,244,245)) #Site --text #f4f4f5
-    textrect = textobj.get_rect()
-    textrect.topleft = (x,y)
-    screen.blit(textobj,textrect)
+def draw_text (text,font,x,y): #Draws text at the given location, splitting on newlines so each \n starts a new line
+    lines = text.split('\n')
+    line_h = font.get_linesize()
+    for i, line in enumerate(lines):
+        textobj = font.render(line,1,(244,244,245)) #Site --text #f4f4f5
+        screen.blit(textobj,(x, y + i * line_h))
 #Actual Content -->
 def Convert(uncoverted_num): #Function to round and convert huge numbers to more understandable formats
     num_abs = abs(uncoverted_num) #Removes direction, only keeps magnitude
