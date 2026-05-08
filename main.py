@@ -1,4 +1,5 @@
-﻿import io
+import io
+# pyrefly: ignore [missing-import]
 import yfinance as yf #Imports Yahoo Finance
 import pandas as pd # Imports pandas for working with tabular data
 import pygame, sys
@@ -208,11 +209,14 @@ def ui (screen,mainClock):
     anim_phase = 'idle'
     anim_full_text = ""
     anim_text_idx = 0
-    #Per-graph fold-out state (mirrors wacc_open / wacc_anim) - title button by default, click to fold out the full graph
-    stock_open = False
-    stock_anim = 0.0
-    fcf_open = False
-    fcf_anim = 0.0
+    # Animation states for graphs
+    stock_ticker = ""
+    stock_data = None
+    stock_n = 0
+    fcf_data = None
+    fcf_n = 0
+    fcf_n_float = 0.0
+    fcf_total = 0
 
     def wacc_box(): #Checkbox-only by default; when ticked, the WACC input animates out to the right
         nonlocal wacc_anim
@@ -243,6 +247,7 @@ def ui (screen,mainClock):
         nonlocal graph_surf #Updates the variable #Graph
         nonlocal fcf_graph_surf #Updates the FCF graph variable
         nonlocal anim_phase, anim_full_text, anim_text_idx
+        nonlocal stock_data, fcf_data, stock_ticker, stock_n, fcf_n, fcf_n_float, fcf_total
         try:
             pygame.display.update()
             if (text[4] == "Enter WACC or Leave Empty"):  # If the user enters a WACC, the program will not calculate one itself
@@ -250,10 +255,28 @@ def ui (screen,mainClock):
             else:
                 wacc_val = float(text[4])/100
             out_ans, proj_fcf_list, past_fcf_series = FMajor(text[0].upper(), text[1], text[2], text[3], wacc_val)
-            text[5] = out_ans
 
-            graph_surf = out_graph_surf(text[0],412,342) #Outputs a graph based on the ticker based on stock performance #Graph (rendered slightly smaller than the 420x350 fold-out box so the container border stays visible)
-            fcf_graph_surf = out_fcf_graph_surf(past_fcf_series, proj_fcf_list, 412, 342) #Outputs FCF graph for past and projected free cash flows (also inset 4px so the box frames it)
+            try:
+                stock = yf.Ticker(text[0].upper())
+                hist = stock.history(period="5y")['Close']
+                stock_data = (list(hist.index), list(hist.values)) if not hist.empty else None
+            except:
+                stock_data = None
+
+            fcf_data = (past_fcf_series, proj_fcf_list)
+            stock_ticker = text[0].upper()
+
+            stock_n = 0
+            fcf_n = 0
+            fcf_n_float = 0.0
+            
+            past_fcf_len = len(past_fcf_series) if past_fcf_series is not None and not past_fcf_series.empty else 0
+            proj_fcf_len = len(proj_fcf_list) if proj_fcf_list else 0
+            fcf_total = past_fcf_len + proj_fcf_len
+
+            graph_surf = None
+            fcf_graph_surf = None
+
             #Start the letter-by-letter reveal of the DCF text (graphs are revealed by clicking their fold-out buttons)
             anim_full_text = out_ans
             anim_text_idx = 0
@@ -264,27 +287,20 @@ def ui (screen,mainClock):
             text[5] = "Invalid Input"
             graph_surf = None #Graph
             fcf_graph_surf = None #Resets the FCF graph on invalid input
+            stock_data = None
+            fcf_data = None
             anim_phase = 'idle'
 
-    def graph_fold_box(x, y, btn_w, btn_h, full_w, full_h, label, is_open, anim, surf): #Fold-out tile: title button by default; click to expand to the full graph (returns the current rect and the next anim value)
-        target = 1.0 if is_open else 0.0
-        if anim < target: anim = min(target, anim + 0.08) #Same step as wacc_anim so timing matches
-        elif anim > target: anim = max(target, anim - 0.08)
-        eased = 1 - (1 - anim) ** 3 #Ease-out cubic, same curve as wacc_box
-        cur_w = btn_w + int((full_w - btn_w) * eased)
-        cur_h = btn_h + int((full_h - btn_h) * eased)
-        rect = pygame.Rect(x, y, cur_w, cur_h)
-        pygame.draw.rect(screen, (24,24,27), rect, border_radius=8) #Site --tag-bg
-        if anim >= 0.99 and surf is not None: #Once fully expanded, blit the pre-rendered graph inset 4px so the box frames it
+    def static_graph_box(x, y, w, h, label, surf):
+        rect = pygame.Rect(x, y, w, h)
+        if surf is not None:
             screen.blit(surf, (x+4, y+4))
-        elif anim < 0.99: #While collapsed or mid-animation, show the title centred in the box
+        else:
             label_font = pygame.font.SysFont("inter,segoeui,consolas", 16)
             label_surf = label_font.render(label, True, (244,244,245))
             label_rect = label_surf.get_rect(center=rect.center)
             screen.blit(label_surf, label_rect.topleft)
-        out_colour = (192,57,43) if rect.collidepoint(pygame.mouse.get_pos()) else (39,39,42) #Site --accent on hover, --border at rest (drawn last so it stays visible on top of the graph)
-        pygame.draw.rect(screen, out_colour, rect, 2, border_radius=8)
-        return rect, anim
+        return rect
 
 
     while True: #This code will always run
@@ -294,10 +310,24 @@ def ui (screen,mainClock):
         pygame.draw.line(screen,(39,39,42),(490,0),(490,800),1)
         pygame.draw.line(screen,(39,39,42),(0,400),(980,400),1)
 
-        #Animation tick: only the output text reveals automatically. Each graph waits for its title button to be clicked.
+        #Animation tick: output text reveals first, graphs only start once text is fully revealed
         if anim_text_idx < len(anim_full_text):
             anim_text_idx = min(len(anim_full_text), anim_text_idx + 8) #~8 chars per frame
             text[5] = anim_full_text[:anim_text_idx]
+        elif anim_full_text:  #Text animation complete – now animate graphs
+            if stock_data and stock_n < len(stock_data[0]):
+                stock_n += max(1, len(stock_data[0]) // 30)
+                if stock_n > len(stock_data[0]):
+                    stock_n = len(stock_data[0])
+                graph_surf = out_graph_surf_anim(stock_ticker, stock_data[0], stock_data[1], [], [], stock_n, 412, 342)
+
+            if fcf_data and fcf_n < fcf_total:
+                fcf_n_float += 0.5
+                if int(fcf_n_float) > fcf_n:
+                    fcf_n = int(fcf_n_float)
+                    if fcf_n > fcf_total:
+                        fcf_n = fcf_total
+                    fcf_graph_surf = out_fcf_graph_surf_anim(fcf_data[0], fcf_data[1], fcf_n, 412, 342)
 
         #Dynamic output box: width and height fit only the currently-visible characters
         out_font = pygame.font.SysFont("inter,segoeui,consolas", 15)
@@ -313,10 +343,10 @@ def ui (screen,mainClock):
                 wacc_box(), #WACC widget: left 1/4 is the checkbox, right 3/4 is the input (editable only when ticked)
                 inp_box(screen,50,260,out_box_w,out_box_h,text[5],font_size=15)] #Initalises all squares (output box now sizes to its current text content)
 
-        #Graph fold-out tiles: each is a title button by default; click to expand into the full pre-rendered graph
-        stock_label = (f"{text[0].upper()} : Stock Performance" if text[0] and text[0] != saved_Text_Data[0] else "Stock Performance")
-        stock_rect, stock_anim = graph_fold_box(520, 50, 260, 50, 420, 350, stock_label, stock_open, stock_anim, graph_surf)
-        fcf_rect, fcf_anim = graph_fold_box(520, 420, 320, 50, 420, 350, "Free Cash Flow : Past & Projected", fcf_open, fcf_anim, fcf_graph_surf)
+        #Graph displays: static bounding boxes with slow-animating pre-rendered graph content
+        stock_label = (f"{stock_ticker} : Stock Performance" if stock_ticker else "Stock Performance")
+        static_graph_box(520, 50, 420, 350, stock_label, graph_surf)
+        static_graph_box(520, 420, 420, 350, "Free Cash Flow : Past & Projected", fcf_graph_surf)
 
 
         for event in pygame.event.get():
@@ -325,11 +355,7 @@ def ui (screen,mainClock):
                 sys.exit()
 
             if event.type == MOUSEBUTTONDOWN: #Checks whether anything has been inputted
-                #Graph fold-out buttons: click to toggle each graph open/closed (independent of the input rect[] list)
-                if stock_rect.collidepoint(event.pos):
-                    stock_open = not stock_open
-                elif fcf_rect.collidepoint(event.pos):
-                    fcf_open = not fcf_open
+
                 for i in range(len(rect)):
                     if (rect[i].collidepoint(event.pos)):  #Active is validated if the mouse/clicker touching the input button
                         active_box = i
@@ -429,7 +455,7 @@ def DCF(proj_time_1,growth_r_1,p_growth_r_1,wacc_2,ebit_1, ebitda_1, ncwc_1_a, n
         ncwc_b.append((ncwc_b[i-1] / ebit_2[i-1]) * ebit_2[i]) #Calculates the ncwc balance for the given year
         ncwc_c.append(ncwc_b[i] - ncwc_b[i-1]) #Calculates the year-on-year change in ncwc
         d_a.append(d_a[i - 1] * (1 + growth_r_1))
-        cap_ex_2.append(cap_ex_2[i-1]* (1 + growth_r_1))
+        cap_ex_2.append(cap_ex_2[i-1] * (1 + growth_r_1))
         tax_2.append((tax_2[0] / ebit_2[0]) * ebit_2[i])
 
         fcf.append(ebit_2[i] - tax_2[i] + cap_ex_2[i] - ncwc_c[i] + d_a[i]) #Free cash flow calculation
