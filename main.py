@@ -415,7 +415,12 @@ def WACC(ticker_str): #Automatically creates a WACC
     equ_val_wacc = ticker_wacc.info.get("marketCap",0) #Saves market cap
     total_debt = ticker_wacc.info.get("totalDebt",0) #Saves total debt
     weight_of_equ = equ_val_wacc/(total_debt + equ_val_wacc) #Saves the weight of equity
-    risk_free_r = (yf.Ticker("^TNX")).history(period='1d')['Close'].iloc[0] / 100 #Saves risk-free rate (10 year US treasury yield)
+    #Saves risk-free rate (10 year US treasury yield). ^TNX returns nothing for period='1d' on weekends/holidays or when Yahoo rate-limits, so widen the window and fall back to a static 4% if nothing comes back.
+    try:
+        tnx_hist = yf.Ticker("^TNX").history(period='5d')['Close'].dropna()
+        risk_free_r = float(tnx_hist.iloc[-1]) / 100 if not tnx_hist.empty else 0.04
+    except:
+        risk_free_r = 0.04
     cost_of_equ = risk_free_r + (0.05 * ticker_wacc.info.get("beta",1.0)) #Adds risk-free rate to beta multiplied by market risk premium (assumed to be 0.05)
     weight_of_debt = total_debt/(total_debt + equ_val_wacc) #Saves the weight of debt
     cost_of_debt = abs(i_state.get('Interest Expense',0).iloc[0])/total_debt #Retrieves magnitude of interest expense (as it is sometimes reported negative) and divides it by total debt
